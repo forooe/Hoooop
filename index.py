@@ -1,53 +1,52 @@
 import os, time, asyncio
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.tl.types import DocumentAttributeFilename
+from telethon.tl.types import DocumentAttributeFilename, MessageEntityCustomEmoji
 
-# --- البيانات المستخرجة من ريلوي ---
+# --- البيانات من ريلوي ---
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 932821457))
 
-# تشغيل المحركات
 user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 bot_client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 user_data = {}
-last_use_time = {} # نظام الانتظار
+last_use_time = {}
 
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size < 1024.0: return f"{size:.2f} {unit}"
         size /= 1024.0
 
-def get_em(eid, alt=""):
-    return f'<emoji id="{eid}">{alt}</emoji>'
+# دالة ذكية لإرسال الإيموجي المميز في النصوص
+def get_em(eid):
+    return f'<emoji id="{eid}">📍</emoji>'
 
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def start(event):
     chat_id = event.chat_id
-    
-    # التحقق من وقت الانتظار
     if chat_id in last_use_time:
         rem_time = int(300 - (time.time() - last_use_time[chat_id]))
         if rem_time > 0:
-            return await event.reply(f"⚠️ يرجى الانتظار {rem_time // 60} دقيقة و {rem_time % 60} ثانية قبل المحاولة مجدداً.")
+            return await event.reply(f"⚠️ يرجى الانتظار {rem_time // 60} دقيقة و {rem_time % 60} ثانية.")
 
     sender = await event.get_sender()
-    admin_msg = f"👤 مستخدم جديد:\n@{sender.username} | `{chat_id}`"
-    await bot_client.send_message(ADMIN_ID, admin_msg)
+    name = sender.first_name
 
-    msg = (f"اهلا بك {get_em('5418017294473251153')}\n"
+    # نص الرسالة مع الإيموجيات (باستخدام HTML)
+    msg = (f"اهلا بك {name} {get_em('5418017294473251153')}\n"
            f"وضيفة البوت {get_em('5105205613600704262')}\n"
            f"يمكنك من خلال هذا البوت تغيير اسم او صورة ل اي ملف مهما كان حجم الملف حتى لو كان حجمه اكثر من 4GB يمكنك فعل ذالك مجانا {get_em('5107633124821436343')}\n\n"
            f"ماذا تريد ان تفعل الآن {get_em('5104863772858647981')}")
     
+    # في الأزرار: تليجرام لا يدعم الـ HTML، سنضع الإيموجي العادي بجانب النص كبديل احترافي
     buttons = [
-        [Button.inline(f"تغيير اسم ملف فقط {get_em('5332724926216428039')}", data="mode_name")],
-        [Button.inline(f"تغيير صورة الملف فقط {get_em('5215638109068220476')}", data="mode_thumb")],
-        [Button.inline(f"تغيير الاسم و الصورة معا {get_em('5244672079399248361')}", data="mode_both")]
+        [Button.inline(f"تغيير اسم ملف فقط 📝", data="mode_name")],
+        [Button.inline(f"تغيير صورة الملف فقط 🖼️", data="mode_thumb")],
+        [Button.inline(f"تغيير الاسم و الصورة معا 🔄", data="mode_both")]
     ]
     await event.reply(msg, buttons=buttons, parse_mode='html')
 
@@ -88,7 +87,6 @@ async def handle_inputs(event):
             return
 
     if event.document:
-        await bot_client.send_message(ADMIN_ID, f"📎 ملف من `{chat_id}`", file=event.document)
         user_data[chat_id]['file'] = event.document
         user_data[chat_id]['file_name'] = event.file.name
         if mode == 'name':
@@ -98,7 +96,7 @@ async def handle_inputs(event):
 
 async def process_file(event, chat_id):
     data = user_data[chat_id]
-    status_msg = await event.respond("📡 جاري البدء...")
+    status_msg = await event.respond(f"📡 جاري البدء... {get_em('5406745015365943482')}", parse_mode='html')
     try:
         start_t = time.time()
         async def prog_cb(c, t, action, eid):
@@ -116,14 +114,12 @@ async def process_file(event, chat_id):
         prog_cb.start = time.time()
         path = await bot_client.download_media(data['file'], progress_callback=lambda c,t: prog_cb(c,t, "جار تحميل ملفك", "5406745015365943482"))
         
-        # تعديل الاسم لإضافة التوقيع الإجباري
         raw_name = data.get('new_name', data.get('file_name', "file"))
         base, ext = os.path.splitext(raw_name)
         final_name = f"{base}_By_Fileeeibot{ext}"
 
         async with user_client:
             prog_cb.start = time.time()
-            # حل مشكلة الأحجام الكبيرة بإضافة force_document
             sent = await user_client.send_file(
                 'me', path, thumb=data.get('thumb'),
                 attributes=[DocumentAttributeFilename(final_name)],
@@ -134,8 +130,6 @@ async def process_file(event, chat_id):
         
         await status_msg.delete()
         if os.path.exists(path): os.remove(path)
-        
-        # تفعيل الـ 5 دقائق انتظار
         last_use_time[chat_id] = time.time()
         asyncio.create_task(cooldown_timer(chat_id))
 
@@ -146,5 +140,5 @@ async def cooldown_timer(chat_id):
     await asyncio.sleep(300)
     await bot_client.send_message(chat_id, "✅ يمكنك الان عمل من الجديد اضغط /start")
 
-print("البوت المجهول يعمل...")
+print("البوت يعمل...")
 bot_client.run_until_disconnected()
