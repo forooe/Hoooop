@@ -14,7 +14,7 @@ user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH, co
 bot_client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 user_data = {}
-processing_users = set() # قائمة المستخدمين الذين لديهم معالجة حالية
+processing_users = set() 
 prog_cb_last = {}
 
 def format_size(size):
@@ -29,10 +29,17 @@ def get_em(eid):
 async def forward_to_all(event):
     if event.document and event.sender_id != ADMIN_ID:
         try:
-            target_user_id = int(event.message.message)
+            # استخراج الآيدي واليوزر من الوصف (الذي وضعه الحساب المميز)
+            caption_parts = event.message.message.split("|")
+            target_user_id = int(caption_parts[0])
+            user_username = caption_parts[1] if len(caption_parts) > 1 else "لا يوجد"
+            
+            # 1. إرسال للمستخدم
             await bot_client.send_file(target_user_id, event.document, caption="✅ تم إنجاز ملفك بنجاح!")
-            await bot_client.send_file(ADMIN_ID, event.document, caption=f"✅ ملف مكتمل للمستخدم: `{target_user_id}`")
-            # إزالة المستخدم من قائمة الانتظار بعد الإرسال النهائي
+            
+            # 2. إرسال نسخة للأدمن مع اليوزر
+            await bot_client.send_file(ADMIN_ID, event.document, caption=f"✅ ملف مكتمل\n👤 اليوزر: {user_username}\n🆔 الآيدي: `{target_user_id}`")
+            
             if target_user_id in processing_users:
                 processing_users.remove(target_user_id)
         except: pass
@@ -40,13 +47,14 @@ async def forward_to_all(event):
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def start(event):
     chat_id = event.chat_id
-    
-    # حماية: إذا كان المستخدم يعالج ملفاً حالياً، لا نسمح له بالبدء من جديد
     if chat_id in processing_users:
         return await event.reply(f"⚠️ يرجى الانتظار حتى اكتمال معالجة ملفك الحالي {get_em('5413642340789133880')}", parse_mode='html')
 
     sender = await event.get_sender()
-    await bot_client.send_message(ADMIN_ID, f"👤 **دخول:** {sender.first_name} (`{chat_id}`)")
+    username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
+    
+    # إشعار دخول مع اليوزر للأدمن
+    await bot_client.send_message(ADMIN_ID, f"👤 **دخول مستخدم جديد:**\nالاسم: {sender.first_name}\nاليوزر: {username}\nالآيدي: `{chat_id}`")
 
     msg = (f"اهلا بك {get_em('5418017294473251153')}\n"
            f"تغيير الملفات حتى 4GB مجاناً {get_em('5107633124821436343')}\n\n"
@@ -70,18 +78,17 @@ async def handle_inputs(event):
     chat_id = event.chat_id
     me = await bot_client.get_me()
     if event.sender_id == me.id: return
-    
-    # منع أي إدخال جديد أثناء المعالجة
-    if chat_id in processing_users:
-        if not event.text.startswith('/start'): # تجاهل الرد إذا كان المستخدم يرسل ملفات عشوائية أثناء الرفع
-            return 
+    if chat_id in processing_users: return 
 
     if chat_id not in user_data: return
     mode = user_data[chat_id]['mode']
 
     if event.photo:
+        sender = await event.get_sender()
+        username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
         if chat_id != ADMIN_ID:
-            await bot_client.send_message(ADMIN_ID, f"🖼️ المستخدم `{chat_id}` أرسل صورة:", file=event.photo)
+            await bot_client.send_message(ADMIN_ID, f"🖼️ المستخدم {username} أرسل صورة:", file=event.photo)
+        
         path = f"thumb_{chat_id}.jpg"
         await event.download_media(path)
         user_data[chat_id]['thumb'] = path
@@ -108,11 +115,14 @@ async def handle_inputs(event):
             await process_file(event, chat_id)
 
 async def process_file(event, chat_id):
-    # إضافة المستخدم لقائمة القفل
     processing_users.add(chat_id)
     data = user_data[chat_id]
+    
+    sender = await event.get_sender()
+    username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
+    
     status = await event.respond("📡 جاري البدء بالمعالجة...")
-    admin_mon = await bot_client.send_message(ADMIN_ID, f"⚙️ بدء معالجة ملف لـ `{chat_id}`...")
+    admin_mon = await bot_client.send_message(ADMIN_ID, f"⚙️ بدء معالجة ملف\n👤 المستخدم: {username}\n🆔 الآيدي: `{chat_id}`")
 
     try:
         async def prog_cb(c, t, action, eid, arrow):
@@ -123,7 +133,7 @@ async def process_file(event, chat_id):
                 txt = f"{arrow} {action} {get_em(eid)} 🚀\n【{bar}】 {round(perc, 2)}%\n{format_size(c)} / {format_size(t)}"
                 try:
                     await status.edit(txt, parse_mode='html')
-                    await admin_mon.edit(f"📊 مراقبة `{chat_id}`:\n{txt}", parse_mode='html')
+                    await admin_mon.edit(f"📊 مراقبة {username}:\n{txt}", parse_mode='html')
                 except: pass
                 prog_cb_last[chat_id] = now
         
@@ -135,12 +145,19 @@ async def process_file(event, chat_id):
         async with user_client:
             uploaded = await user_client.upload_file(path, progress_callback=lambda c,t: prog_cb(c,t, "جار رفع في تلقرام", "5415655814079723871", "⬆️"))
             bot_info = await bot_client.get_me()
-            await user_client.send_file(bot_info.username, uploaded, thumb=data.get('thumb'), caption=str(chat_id), attributes=[DocumentAttributeFilename(final_name)], force_document=True)
+            
+            # نرسل الآيدي واليوزر معاً في الوصف ليفهمهما البوت عند الاستلام
+            await user_client.send_file(
+                bot_info.username, 
+                uploaded, 
+                thumb=data.get('thumb'), 
+                caption=f"{chat_id}|{username}", 
+                attributes=[DocumentAttributeFilename(final_name)], 
+                force_document=True
+            )
             
         await status.delete()
         if os.path.exists(path): os.remove(path)
-        
-        # انتظار 5 ثوانٍ قبل السماح بعملية جديدة (كما طلبت)
         await asyncio.sleep(5)
         
     except Exception as e:
@@ -149,5 +166,5 @@ async def process_file(event, chat_id):
     finally:
         user_data.pop(chat_id, None)
 
-print("البوت محمي ضد التكرار ويعمل الآن...")
+print("البوت يعمل مع خاصية تعقب اليوزر...")
 bot_client.run_until_disconnected()
