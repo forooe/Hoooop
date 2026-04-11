@@ -15,6 +15,7 @@ bot_client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 user_data = {}
 processing_users = set() 
+cancelled_processes = set()
 prog_cb_last = {}
 
 def format_size(size):
@@ -27,22 +28,33 @@ def get_em(eid):
 
 @bot_client.on(events.NewMessage(incoming=True))
 async def forward_to_all(event):
-    if event.document and event.sender_id != ADMIN_ID:
+    if event.document and event.is_private and event.sender_id != ADMIN_ID:
         try:
-            # استخراج الآيدي واليوزر من الوصف (الذي وضعه الحساب المميز)
             caption_parts = event.message.message.split("|")
             target_user_id = int(caption_parts[0])
             user_username = caption_parts[1] if len(caption_parts) > 1 else "لا يوجد"
             
-            # 1. إرسال للمستخدم
+            # إرسال الملف للمستخدم
             await bot_client.send_file(target_user_id, event.document, caption="✅ تم إنجاز ملفك بنجاح!")
             
-            # 2. إرسال نسخة للأدمن مع اليوزر
+            # إرسال نسخة للأدمن
             await bot_client.send_file(ADMIN_ID, event.document, caption=f"✅ ملف مكتمل\n👤 اليوزر: {user_username}\n🆔 الآيدي: `{target_user_id}`")
+            
+            # بدء العداد الزمني للمستخدم (5 دقائق)
+            asyncio.create_task(cooldown_timer(target_user_id))
             
             if target_user_id in processing_users:
                 processing_users.remove(target_user_id)
         except: pass
+
+async def cooldown_timer(chat_id):
+    """دالة العداد الزمني 5 دقائق مع التحديث الحي"""
+    msg = await bot_client.send_message(chat_id, "⏳ جاري بدء مؤقت الانتظار...")
+    for i in range(300, 0, -10):
+        mins, secs = divmod(i, 60)
+        await msg.edit(f"⏳ يرجى الانتظار {mins:02d}:{secs:02d} لإرسال ملف جديد...")
+        await asyncio.sleep(10)
+    await msg.edit("✅ يمكنك الآن العمل من جديد!")
 
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def start(event):
@@ -51,14 +63,15 @@ async def start(event):
         return await event.reply(f"⚠️ يرجى الانتظار حتى اكتمال معالجة ملفك الحالي {get_em('5413642340789133880')}", parse_mode='html')
 
     sender = await event.get_sender()
+    first_name = sender.first_name
     username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
     
-    # إشعار دخول مع اليوزر للأدمن
-    await bot_client.send_message(ADMIN_ID, f"👤 **دخول مستخدم جديد:**\nالاسم: {sender.first_name}\nاليوزر: {username}\nالآيدي: `{chat_id}`")
+    await bot_client.send_message(ADMIN_ID, f"👤 **دخول مستخدم جديد:**\nالاسم: {first_name}\nاليوزر: {username}\nالآيدي: `{chat_id}`")
 
-    msg = (f"اهلا بك {get_em('5418017294473251153')}\n"
-           f"تغيير الملفات حتى 4GB مجاناً {get_em('5107633124821436343')}\n\n"
-           f"ماذا تريد ان تفعل الآن؟")
+    msg = (f"اهلا بك {first_name} {get_em('5418017294473251153')}\n"
+           f"وظيفة البوت تغيير صورة واسم الملفات حتى لو كان 4GB مجاناً {get_em('5107633124821436343')}\n\n"
+           f"ماذا تريد انت تفعل الان؟")
+    
     buttons = [[Button.inline("تغيير اسم 📝", data="mode_name")],
                [Button.inline("تغيير صورة 🖼️", data="mode_thumb")],
                [Button.inline("تغيير الاثنين معا 🔄", data="mode_both")]]
@@ -67,11 +80,23 @@ async def start(event):
 @bot_client.on(events.CallbackQuery)
 async def callback(event):
     chat_id = event.chat_id
+    data = event.data.decode()
+
+    if data == "cancel_p":
+        cancelled_processes.add(chat_id)
+        return await event.answer("❌ تم إرسال طلب الإلغاء...", alert=True)
+
     if chat_id in processing_users:
         return await event.answer("⚠️ لديك عملية معالجة قائمة حالياً!", alert=True)
     
-    user_data[chat_id] = {'mode': event.data.decode().replace('mode_', '')}
-    await event.edit(f"أرسل المطلوب الآن {get_em('5807821534051438075')}", parse_mode='html')
+    mode_map = {
+        "mode_name": "تغيير اسم الملف 📝",
+        "mode_thumb": "تغيير صورة الملف 🖼️",
+        "mode_both": "تغيير الاسم والصورة معاً 🔄"
+    }
+    
+    user_data[chat_id] = {'mode': data.replace('mode_', '')}
+    await event.edit(f"وظيفة الزر: **{mode_map.get(data)}**\n\nأرسل المطلوب الآن {get_em('5807821534051438075')}", parse_mode='html')
 
 @bot_client.on(events.NewMessage)
 async def handle_inputs(event):
@@ -84,11 +109,6 @@ async def handle_inputs(event):
     mode = user_data[chat_id]['mode']
 
     if event.photo:
-        sender = await event.get_sender()
-        username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
-        if chat_id != ADMIN_ID:
-            await bot_client.send_message(ADMIN_ID, f"🖼️ المستخدم {username} أرسل صورة:", file=event.photo)
-        
         path = f"thumb_{chat_id}.jpg"
         await event.download_media(path)
         user_data[chat_id]['thumb'] = path
@@ -116,37 +136,39 @@ async def handle_inputs(event):
 
 async def process_file(event, chat_id):
     processing_users.add(chat_id)
-    data = user_data[chat_id]
+    if chat_id in cancelled_processes: cancelled_processes.remove(chat_id)
     
+    data = user_data[chat_id]
     sender = await event.get_sender()
     username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
     
-    status = await event.respond("📡 جاري البدء بالمعالجة...")
-    admin_mon = await bot_client.send_message(ADMIN_ID, f"⚙️ بدء معالجة ملف\n👤 المستخدم: {username}\n🆔 الآيدي: `{chat_id}`")
+    # إضافة زر إلغاء المعالجة تحت الرسالة
+    cancel_btn = [Button.inline("إلغاء المعالجة ❌", data="cancel_p")]
+    status = await event.respond("📡 جاري البدء بالمعالجة...", buttons=cancel_btn)
 
     try:
         async def prog_cb(c, t, action, eid, arrow):
+            if chat_id in cancelled_processes:
+                raise Exception("CANCELLED_BY_USER")
+                
             now = time.time()
             if chat_id not in prog_cb_last or (now - prog_cb_last[chat_id]) > 8:
                 perc = (c * 100 / t) if t > 0 else 0
                 bar = "▰" * int(perc / 10) + "▱" * (10 - int(perc / 10))
                 txt = f"{arrow} {action} {get_em(eid)} 🚀\n【{bar}】 {round(perc, 2)}%\n{format_size(c)} / {format_size(t)}"
-                try:
-                    await status.edit(txt, parse_mode='html')
-                    await admin_mon.edit(f"📊 مراقبة {username}:\n{txt}", parse_mode='html')
+                try: await status.edit(txt, parse_mode='html', buttons=cancel_btn)
                 except: pass
                 prog_cb_last[chat_id] = now
         
         path = await bot_client.download_media(data['file'], progress_callback=lambda c,t: prog_cb(c,t, "جار تحميل ملفك", "5406745015365943482", "⬇️"))
         
         ext = data.get('ext', os.path.splitext(data['file_name'])[1])
-        final_name = f"{data.get('new_name', os.path.splitext(data['file_name'])[0])}_By_Fileeeibot{ext}"
+        final_name = f"{data.get('new_name', os.path.splitext(data['file_name'])[0])}_By_Ali{ext}"
 
         async with user_client:
             uploaded = await user_client.upload_file(path, progress_callback=lambda c,t: prog_cb(c,t, "جار رفع في تلقرام", "5415655814079723871", "⬆️"))
             bot_info = await bot_client.get_me()
             
-            # نرسل الآيدي واليوزر معاً في الوصف ليفهمهما البوت عند الاستلام
             await user_client.send_file(
                 bot_info.username, 
                 uploaded, 
@@ -158,13 +180,17 @@ async def process_file(event, chat_id):
             
         await status.delete()
         if os.path.exists(path): os.remove(path)
-        await asyncio.sleep(5)
         
     except Exception as e:
-        await event.respond(f"❌ خطأ: {e}")
+        if str(e) == "CANCELLED_BY_USER":
+            await event.respond("❌ تم إلغاء المعالجة بنجاح.")
+        else:
+            await event.respond(f"❌ خطأ: {e}")
+            
         if chat_id in processing_users: processing_users.remove(chat_id)
+        if chat_id in cancelled_processes: cancelled_processes.remove(chat_id)
     finally:
         user_data.pop(chat_id, None)
 
-print("البوت يعمل مع خاصية تعقب اليوزر...")
+print("البوت يعمل بنجاح مع كافة التحديثات المطلوبة...")
 bot_client.run_until_disconnected()
