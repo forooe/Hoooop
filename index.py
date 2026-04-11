@@ -3,13 +3,14 @@ from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.tl.types import DocumentAttributeFilename
 
-# --- البيانات الأساسية من Railway ---
+# --- البيانات الأساسية ---
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_STRING = os.environ.get("SESSION_STRING", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 932821457))
 
+# تشغيل الحساب المميز والبوت
 user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 bot_client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
@@ -25,6 +26,7 @@ def format_size(size):
 def get_em(eid):
     return f'<emoji id="{eid}">📍</emoji>'
 
+# --- استقبال الملف المكتمل من الحساب وتوزيعه ---
 @bot_client.on(events.NewMessage(incoming=True))
 async def forwarder(event):
     if event.document and event.is_private and event.sender_id != ADMIN_ID:
@@ -38,23 +40,27 @@ async def forwarder(event):
         except: pass
 
 async def cooldown_timer(uid):
-    await asyncio.sleep(300)
+    await asyncio.sleep(300) # عداد 5 دقائق
     if uid in processing_users: del processing_users[uid]
     await bot_client.send_message(uid, "✅ يمكنك الآن البدء بعملية جديدة!")
 
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def start(event):
     chat_id = event.chat_id
-    if chat_id in processing_users: return await event.reply("⚠️ يرجى الانتظار حتى اكتمال الوقت.")
+    if chat_id in processing_users: return await event.reply("⚠️ يرجى الانتظار.")
     sender = await event.get_sender()
     u_name = f"@{sender.username}" if sender.username else "لا يوجد"
     await bot_client.send_message(ADMIN_ID, f"👤 دخول: {sender.first_name}\nيوزر: {u_name}")
-    msg = (f"اهلا بك {get_em('5418017294473251153')}\n"
-           f"تحويل روابط وملفات حتى 4GB {get_em('5107633124821436343')}\n\n"
-           f"ماذا تريد ان تفعل الآن؟")
+    
+    msg = (f"أهلاً بك يا {sender.first_name} في بوت الرفع المطور 🚀\n\n"
+           f"أصبح بإمكاني الآن:\n"
+           f"1- تغيير اسم وصورة الملفات (4GB) 🖼️\n"
+           f"2- تحويل الروابط المباشرة لملفات تليجرام 🔗\n\n"
+           f"ماذا تريد أن تفعل الآن؟")
+    
     buttons = [[Button.inline("تغيير اسم ملف 📝", data="mode_name")],
                [Button.inline("تغيير صورة ملف 🖼️", data="mode_thumb")],
-               [Button.inline("تغيير الاثنين معا 🔄", data="mode_both")],
+               [Button.inline("تغيير الاثنين معاً 🔄", data="mode_both")],
                [Button.inline("تحويل رابط مباشر 🔗", data="mode_url")]]
     await event.reply(msg, buttons=buttons, parse_mode='html')
 
@@ -80,7 +86,7 @@ async def handle_inputs(event):
     if chat_id not in user_data or chat_id in processing_users: return
     mode = user_data[chat_id]['mode']
 
-    if mode == 'url' and event.text.startswith("http"):
+    if mode == 'url' and event.text and event.text.startswith("http"):
         user_data[chat_id]['url'] = event.text
         name = event.text.split("/")[-1].split("?")[0] or "file"
         user_data[chat_id]['file_name'] = name
@@ -111,7 +117,7 @@ async def handle_inputs(event):
             await event.reply("✅ أرسل الاسم الجديد الآن.")
         else: await run_logic(event, chat_id, "file")
 
-async def run_logic(event, chat_id, type):
+async def run_logic(event, chat_id, source_type):
     processing_users[chat_id] = "active"
     data = user_data[chat_id]
     u_name = f"@{event.sender.username}" if event.sender.username else "لا يوجد"
@@ -127,7 +133,7 @@ async def run_logic(event, chat_id, type):
                 await status.edit(txt, parse_mode='html')
                 prog_cb_last[chat_id] = now
 
-        if type == "url":
+        if source_type == "url":
             path = data['file_name']
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(data['url']) as res:
