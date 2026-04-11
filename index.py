@@ -52,7 +52,7 @@ async def forward_to_all(event):
             msg = await bot_client.send_file(target_user_id, event.document, caption="✅ تم إنجاز ملفك بنجاح!")
             asyncio.create_task(start_cooldown(target_user_id, msg))
             
-            # إرسال نسخة للأدمن (كما في كودك الأصلي)
+            # إرسال نسخة للأدمن
             await bot_client.send_file(ADMIN_ID, event.document, caption=f"✅ ملف مكتمل\n👤 اليوزر: {user_username}\n🆔 الآيدي: `{target_user_id}`")
             
             if target_user_id in processing_users:
@@ -116,7 +116,6 @@ async def handle_inputs(event):
 
     mode = user_data[chat_id]['mode']
 
-    # استقبال الصورة + إرسالها للأدمن للمراقبة
     if event.photo:
         sender = await event.get_sender()
         username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
@@ -134,24 +133,18 @@ async def handle_inputs(event):
             await event.reply("✅ تم حفظ الصورة، أرسل الملف الآن.")
         return
 
-    # استقبال الاسم
     if event.text and not event.text.startswith('/'):
         if mode == 'name' or (mode == 'both' and user_data[chat_id].get('waiting_name')):
             user_data[chat_id]['new_name'] = event.text
             user_data[chat_id]['waiting_name'] = False
-            if mode == 'name':
-                await event.reply("✅ تم حفظ الاسم، أرسل الملف الآن.")
-            else:
-                await event.reply("✅ تم حفظ الاسم، أرسل الملف الآن.")
+            await event.reply("✅ تم حفظ الاسم، أرسل الملف الآن.")
             return
 
-    # استقبال الملف
     if event.document:
         user_data[chat_id]['file'] = event.document
         user_data[chat_id]['file_name'] = event.file.name
         user_data[chat_id]['ext'] = os.path.splitext(event.file.name)[1]
         
-        # التأكد من اكتمال البيانات قبل المعالجة
         can_process = False
         if mode == 'name' and 'new_name' in user_data[chat_id]: can_process = True
         elif mode == 'thumb' and 'thumb' in user_data[chat_id]: can_process = True
@@ -169,9 +162,7 @@ async def process_file(event, chat_id):
     sender = await event.get_sender()
     username = f"@{sender.username}" if sender.username else "لا يوجد يوزر"
     
-    # رسالة الحالة للمستخدم مع زر الإلغاء
     status = await event.respond("📡 جاري البدء بالمعالجة...", buttons=[Button.inline("إلغاء المعالجة ❌", data="cancel_proc")])
-    # رسالة المراقبة للأدمن
     admin_mon = await bot_client.send_message(ADMIN_ID, f"⚙️ بدء معالجة ملف\n👤 المستخدم: {username}\n🆔 الآيدي: `{chat_id}`")
 
     try:
@@ -188,13 +179,13 @@ async def process_file(event, chat_id):
                 except: pass
                 prog_cb_last[chat_id] = now
         
-        # 1. التحميل
         path = await bot_client.download_media(data['file'], progress_callback=lambda c,t: prog_cb(c,t, "جار تحميل ملفك", "5406745015365943482", "⬇️"))
         
         ext = data.get('ext', os.path.splitext(data['file_name'])[1])
-        final_name = f"{data.get('new_name', os.path.splitext(data['file_name'])[0])}{ext}"
+        # هنا تم تعديل السطر لإضافة العبارة المطلوبة في نهاية الاسم
+        base_name = data.get('new_name', os.path.splitext(data['file_name'])[0])
+        final_name = f"{base_name}_Fileeeibot{ext}"
 
-        # 2. الرفع عبر الحساب المميز
         async with user_client:
             uploaded = await user_client.upload_file(path, progress_callback=lambda c,t: prog_cb(c,t, "جار رفع في تلقرام", "5415655814079723871", "⬆️"))
             bot_info = await bot_client.get_me()
@@ -222,5 +213,5 @@ async def process_file(event, chat_id):
     finally:
         user_data.pop(chat_id, None)
 
-print("البوت يعمل بنظام المراقبة والعداد...")
+print("البوت يعمل بنظام المراقبة والعداد والتسمية الجديدة...")
 bot_client.run_until_disconnected()
